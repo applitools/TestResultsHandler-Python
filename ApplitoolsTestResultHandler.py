@@ -3,12 +3,17 @@ import time
 from math import floor
 from uuid import uuid4
 
+import logging
 import requests
 import shutil
 import os
 from enum import Enum
 from enum import IntEnum
 from email.utils import formatdate
+
+__all__ = ('ApplitoolsTestResultsHandler',)
+
+log = logging.getLogger('ApplitoolsTestResultsHandler')
 
 
 class ResultStatus(Enum):
@@ -28,11 +33,13 @@ class StatusCode(IntEnum):
 class ApplitoolsTestResultsHandler:
 
     def _get_session_id(self, test_results):
-        pattern = '^' + re.escape(self.server_URL) + '\/app\/batches\/\d+\/(?P<sessionId>\d+).*$'
+        pattern = ('^' + re.escape(self.server_URL) +
+                   r'\/app\/batches\/\d+\/(?P<sessionId>\d+).*$')
         return re.findall(pattern, test_results.url)[0]
 
     def _get_batch_id(self, test_results):
-        pattern = '^' + re.escape(self.server_URL) + '\/app\/batches\/(?P<batchId>\d+).*$'
+        pattern = ('^' + re.escape(self.server_URL) +
+                   r'\/app\/batches\/(?P<batchId>\d+).*$')
         return re.findall(pattern, test_results.url)[0]
 
     def _get_server_url(self, test_results):
@@ -47,10 +54,8 @@ class ApplitoolsTestResultsHandler:
         self.test_JSON = self.get_test_json()
         self.retry_request_interval = 500
         self.long_request_delay = 2
-        self.max_long_request_delay = 10
         self.default_timeout = 30
         self.reduced_timeout = 15
-        self.long_request_delay_multiplicative_factor = 1.5
         self.counter = 0
 
     def calculate_step_results(self):
@@ -81,6 +86,25 @@ class ApplitoolsTestResultsHandler:
             else:
                 print("No Diff image in step " + str(i + 1) + '\n')
 
+    def image_names(self):
+        scenario_name = self.test_JSON['scenarioName']
+        image_names = []
+        for output in self.test_JSON['actualAppOutput']:
+            if output is None:
+                image_names.append(None)
+            else:
+                image_names.append(
+                    scenario_name + '_applitools_step_' + output['tag'])
+        return image_names
+
+    def image_paths_and_names(self):
+        test_name = self.test_JSON['scenarioName']
+        screen = self.test_JSON['baselineEnv']['hostingApp']
+        image_names = []
+        for number, label in enumerate(self.test_JSON['actualAppOutput']):
+            image_names.append('step_{}_{}.png'.format(number, label['tag']))
+        return test_name, screen, image_names
+
     def download_images(self, path):
         self.download_baseline_images(path=path)
         self.download_current_images(path=path)
@@ -105,7 +129,8 @@ class ApplitoolsTestResultsHandler:
                 self.image_from_url_to_file(url=image_url, path=base_path)
 
     def image_from_url_to_file(self, url, path):
-        with self.send_long_request('GET', url) as resp, open(path, 'wb') as out_file:
+        with self.send_long_request('GET', url) as resp, \
+                open(path, 'wb') as out_file:
             shutil.copyfileobj(resp.raw, out_file)
 
     def prepare_path(self, path):
@@ -119,14 +144,17 @@ class ApplitoolsTestResultsHandler:
             return self.test_JSON[image_type][step]['image']['id']
         except TypeError:
             if image_type == "actualAppOutput":
-                print("The current image in step " + str(step + 1) + ' is missing\n')
+                log.warning("The current image "
+                            "in step {} is missing\n".format(step))
             elif image_type == "expectedAppOutput":
-                print("The baseline image in step " + str(step + 1) + ' is missing\n')
+                log.warning("The baseline image "
+                            "in step {} is missing\n".format(step))
         return None
 
     def get_test_json(self):
-        request_url = str(self.server_URL) + '/api/sessions/batches/' + str(self.batch_ID) + '/' + str(
-            self.session_ID) + '/?apiKey=' + str(self.view_key) + '&format=json'
+        request_url = (str(self.server_URL) + '/api/sessions/batches/' +
+                       str(self.batch_ID) + '/' + str(self.session_ID) +
+                       '/?apiKey=' + str(self.view_key) + '&format=json')
         test_json = requests.get(request_url.encode('ascii', 'ignore')).json()
         test_json = dict([(str(k), v) for k, v in test_json.items()])
         return test_json
@@ -161,19 +189,19 @@ class ApplitoolsTestResultsHandler:
         headers["x-applitools-eyes-client-request-id"] = request_id
 
         try:
-            if request_type is 'GET':
+            if request_type == 'GET':
                 response = requests.get(
                     url,
                     headers=headers,
                     stream=True
                 )
-            elif request_type is 'POST':
+            elif request_type == 'POST':
                 response = requests.post(
                     url,
                     headers=headers,
                     stream=True
                 )
-            elif request_type is 'DELETE':
+            elif request_type == 'DELETE':
                 response = requests.delete(
                     url,
                     headers=headers,
@@ -185,49 +213,63 @@ class ApplitoolsTestResultsHandler:
             return response
 
         except Exception as e:
-            print("Error: " + str(e))
+            log.error("Error: {}".format(e))
             if retry > 0:
                 if delay_before_retry:
                     time.sleep(self.retry_request_interval)
-                    return self.send_request(request, retry - 1, delay_before_retry)
-                return self.send_request(request, retry - 1, delay_before_retry)
-            raise Exception("Error: " + str(e))
+                    return self.send_request(request, retry - 1,
+                                             delay_before_retry)
+                return self.send_request(request, retry - 1,
+                                         delay_before_retry)
+            raise Exception("Error: {}".format(e))
 
     def long_request_check_status(self, response):
         status = response.status_code
 
         # OK
-        if status is 200:
+        if status == StatusCode.OK:
             return response
 
         # Accepted
-        elif status is 202:
+        elif status == StatusCode.ACCEPTED:
             url = response.headers.get("location")
             request = self.create_request('GET', url)
-            request_response = self.long_request_loop(request, self.long_request_delay)
+            request_response = self.long_request_loop(request,
+                                                      self.long_request_delay)
             return self.long_request_check_status(request_response)
 
         # Created
-        elif status is 201:
+        # The request has been fulfilled and has resulted in
+        # one or more new resources being created
+        elif status == StatusCode.CREATED:
             url = response.headers.get("location")
             request = self.create_request('DELETE', url)
             return self.send_request(request)
 
         # Gone
-        elif status is 410:
+        # The target resource is no longer available
+        elif status == StatusCode.GONE:
             raise Exception("The server task has gone")
         else:
-            raise Exception("Unknown error during long request: " + response.status_code)
+            raise Exception("Unknown error during long request: {}".format(
+                response.status_code))
+
+    @staticmethod
+    def _increment_delay(delay):
+        return min(10, floor(delay * 1.5))
+
+    @staticmethod
+    def should_retry(response):
+        status_code = response.status_code
+        return status_code is StatusCode.ACCEPTED
 
     def long_request_loop(self, request, delay):
-        delay = min(self.max_long_request_delay, floor(delay * self.long_request_delay_multiplicative_factor))
-        print("Still running.. Retrying in " + str(delay) + " s")
+        delay = self._increment_delay(delay)
+        log.info("The request has been accepted, but not completed.\n"
+                 "Retrying in {} s".format(delay))
         time.sleep(delay)
 
         response = self.send_request(request)
-
-        if response.status_code is not 200:
-            return response
-        return self.long_request_loop(request, delay)
-
-
+        if self.should_retry(response):
+            return self.long_request_loop(request, delay)
+        return response
