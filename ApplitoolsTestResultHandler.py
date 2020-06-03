@@ -133,6 +133,11 @@ class ApplitoolsTestResultsHandler:
                 open(path, 'wb') as out_file:
             shutil.copyfileobj(resp.raw, out_file)
 
+    def explicitly(self, url, path):
+        with self.send_long_request('GET', url) as resp, \
+                open(path, 'wb') as out_file:
+            shutil.copyfileobj(resp.raw, out_file)
+
     def prepare_path(self, path):
         path = path + "/" + self.batch_ID + "/" + self.session_ID
         if not os.path.exists(path):
@@ -164,7 +169,7 @@ class ApplitoolsTestResultsHandler:
         response = self.send_request(request)
         return self.long_request_check_status(response)
 
-    def create_request(self, request_type, url, request=None):
+    def create_request_headers(self, request_type, url, request=None):
         if request is None:
             request = {}
         current_date = formatdate(timeval=None, localtime=False, usegmt=True)
@@ -172,6 +177,15 @@ class ApplitoolsTestResultsHandler:
             "Eyes-Expect": "202+location",
             "Eyes-Date": current_date
         }
+        request["headers"] = headers
+        request["url"] = url
+        request["request_type"] = request_type
+        return request
+
+    def create_request(self, request_type, url, request=None):
+        if request is None:
+            request = {}
+        headers = {}
         request["headers"] = headers
         request["url"] = url
         request["request_type"] = request_type
