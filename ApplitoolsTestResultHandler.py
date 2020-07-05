@@ -1,7 +1,6 @@
 import re
 import time
 from math import floor
-from uuid import uuid4
 
 import logging
 import requests
@@ -131,11 +130,10 @@ class ApplitoolsTestResultsHandler:
     def image_from_url_to_file(self, url, path):
         with self.send_long_request('GET', url) as resp, \
                 open(path, 'wb') as out_file:
-            shutil.copyfileobj(resp.raw, out_file)
-
-    def explicitly(self, url, path):
-        with self.send_long_request('GET', url) as resp, \
-                open(path, 'wb') as out_file:
+            out_file.write(resp.content)
+            out_file.flush()
+            out_file.close()
+            resp.raw.decode_content = True
             shutil.copyfileobj(resp.raw, out_file)
 
     def prepare_path(self, path):
@@ -185,42 +183,32 @@ class ApplitoolsTestResultsHandler:
     def create_request(self, request_type, url, request=None):
         if request is None:
             request = {}
-        headers = {}
-        request["headers"] = headers
         request["url"] = url
         request["request_type"] = request_type
         return request
 
     def send_request(self, request, retry=1, delay_before_retry=False):
         self.counter += 1
-        request_id = str(self.counter) + "--" + str(uuid4())
 
-        headers = request.get("headers")
         request_type = request.get("request_type")
         url = request.get("url")
         url = url + "?apiKey=" + self.view_key
-
-        headers["x-applitools-eyes-client-request-id"] = request_id
 
         try:
             if request_type == 'GET':
                 response = requests.get(
                     url,
-                    headers=headers,
                     stream=True
                 )
             elif request_type == 'POST':
                 response = requests.post(
                     url,
-                    headers=headers,
                     stream=True
                 )
             elif request_type == 'DELETE':
                 response = requests.delete(
                     url,
-                    headers=headers,
                     stream=True
-
                 )
             else:
                 raise Exception("Not a valid request type")
